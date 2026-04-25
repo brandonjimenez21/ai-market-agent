@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
+import ReactMarkdown from 'react-markdown';
 
 interface Message {
   id: number;
@@ -199,7 +200,7 @@ export default function Home() {
 
             <input 
               type="file" 
-              accept=".txt" 
+              accept=".txt,.pdf" 
               ref={fileInputRef}
               onChange={handleFileUpload}
               className="hidden" 
@@ -233,10 +234,25 @@ export default function Home() {
                   ? 'bg-neutral-800 text-white py-2 px-4 rounded-2xl rounded-tr-sm' 
                   : msg.role === 'system' 
                   ? 'text-neutral-500 text-xs font-mono py-1' 
-                  : 'text-neutral-300 py-2'
+                  : 'text-neutral-300 py-2 flex flex-col'
               }`}>
-                {msg.role === 'bot' && <span className="font-bold text-white mr-2">AI:</span>}
-                {msg.content}
+                {msg.role === 'bot' && <div className="font-bold text-white mb-1">AI:</div>}
+                
+                {msg.role === 'bot' ? (
+                  <ReactMarkdown
+                    components={{
+                      p: ({node, ...props}) => <p className="mb-2 last:mb-0" {...props} />,
+                      ul: ({node, ...props}) => <ul className="list-disc ml-5 mb-2 space-y-1" {...props} />,
+                      ol: ({node, ...props}) => <ol className="list-decimal ml-5 mb-2 space-y-1" {...props} />,
+                      li: ({node, ...props}) => <li className="text-neutral-300" {...props} />,
+                      strong: ({node, ...props}) => <strong className="font-semibold text-white" {...props} />,
+                    }}
+                  >
+                    {msg.content}
+                  </ReactMarkdown>
+                ) : (
+                  msg.content
+                )}
               </div>
             </div>
           ))}

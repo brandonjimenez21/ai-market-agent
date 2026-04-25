@@ -7,3 +7,4 @@ qdrant-client
 langchain-qdrant
 python-multipart
 langchain-text-splitters
+pypdf

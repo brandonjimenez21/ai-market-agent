@@ -1,4 +1,5 @@
 import os
+import io
 from fastapi import FastAPI, UploadFile, File, Form
 from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
 from langchain_core.prompts import PromptTemplate
@@ -6,6 +7,7 @@ from langchain_core.documents import Document
 from langchain_qdrant import QdrantVectorStore
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from qdrant_client.models import Filter, FieldCondition, MatchValue
+from pypdf import PdfReader
 
 app = FastAPI(title="AI Market Agent - Full RAG")
 
@@ -39,18 +41,27 @@ def normal_chat(question: str = "Hello"):
 @app.post("/api/ai/upload")
 async def upload_document(file: UploadFile = File(...), user_id: str = Form(...)):
     try:
-        # 1. Read the file content
         content = await file.read()
-        text = content.decode("utf-8")
+        text = ""
         
-        # 2. Split the text into smaller chunks for the AI to digest easily
+        if file.filename.lower().endswith(".pdf"):
+            pdf_reader = PdfReader(io.BytesIO(content))
+            for page in pdf_reader.pages:
+                extracted = page.extract_text()
+                if extracted:
+                    text += extracted + "\n"
+        else:
+            text = content.decode("utf-8")
+            
+        if not text.strip():
+            return {"error": "Could not extract text. The file might be empty or a scanned image."}
+        
         text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=500,   
-            chunk_overlap=50 
+            chunk_size=500,
+            chunk_overlap=50
         )
         chunks = text_splitter.split_text(text)
         
-        # 3. Create Document objects attaching the user_id as metadata (The Secret Tag!)
         docs = [
             Document(
                 page_content=chunk, 
@@ -58,7 +69,6 @@ async def upload_document(file: UploadFile = File(...), user_id: str = Form(...)
             ) for chunk in chunks
         ]
         
-        # 4. Save to Qdrant memory
         QdrantVectorStore.from_documents(
             docs,
             embeddings_model,
@@ -88,7 +98,7 @@ def rag_chat(question: str, user_id: str = ""):
             ]
         )
         
-        results = vector_store.similarity_search(question, k=3, filter=search_filter)
+        results = vector_store.similarity_search(question, k=8, filter=search_filter)
         
         if not results:
             return {
@@ -99,7 +109,9 @@ def rag_chat(question: str, user_id: str = ""):
         found_context = "\n".join([doc.page_content for doc in results])
         
         prompt_rag = PromptTemplate.from_template("""
-        You are a strict assistant. Answer the question based ONLY on the following context.
+        You are an expert and helpful AI assistant. 
+        Answer the user's question based ONLY on the following context.
+        Provide a comprehensive, detailed, and well-explained answer. If they ask about a topic or chapter, summarize its main points clearly, don't just give the title.
         If the answer is not in the context, say "I don't have information about that in my documents".
         
         Context found in the database:

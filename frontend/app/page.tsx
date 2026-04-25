@@ -18,8 +18,11 @@ export default function Home() {
   const [mode, setMode] = useState<'normal' | 'rag'>('normal');
   const [userId, setUserId] = useState<string>('');
   
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [showDocsModal, setShowDocsModal] = useState(false);
+  const [documents, setDocuments] = useState<string[]>([]);
+  const [loadingDocs, setLoadingDocs] = useState(false);
   
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -37,6 +40,40 @@ export default function Home() {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, loading]);
+
+  useEffect(() => {
+    const fetchDocs = async () => {
+      if (!showDocsModal || !userId) return;
+      
+      setLoadingDocs(true); 
+      try {
+        const res = await fetch(`http://localhost:8080/api/documents?user_id=${encodeURIComponent(userId)}`);
+        const data = await res.json();
+        if (data.documents) {
+          setDocuments(data.documents);
+        }
+      } catch (e) {
+        console.error("Failed to load documents", e);
+      }
+      setLoadingDocs(false);
+    };
+
+    fetchDocs();
+  }, [showDocsModal, userId]);
+
+  const handleDeleteDocument = async (filename: string) => {
+    try {
+      const res = await fetch(`http://localhost:8080/api/documents?user_id=${encodeURIComponent(userId)}&filename=${encodeURIComponent(filename)}`, {
+        method: 'DELETE'
+      });
+      if (res.ok) {
+        setDocuments(prev => prev.filter(doc => doc !== filename));
+        setMessages(prev => [...prev, { id: Date.now(), role: 'system', content: `Document "${filename}" deleted permanently.` }]);
+      }
+    } catch (e) {
+      console.error("Failed to delete document", e);
+    }
+  };
 
   const sendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -98,8 +135,47 @@ export default function Home() {
   };
 
   return (
-    <main className="min-h-screen flex flex-col items-center justify-center bg-[#0a0a0a] text-neutral-200 font-sans p-4">
+    <main className="min-h-screen flex flex-col items-center justify-center bg-[#0a0a0a] text-neutral-200 font-sans p-4 relative">
       
+      {showDocsModal && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="bg-[#111111] border border-neutral-800 rounded-xl w-full max-w-md shadow-2xl overflow-hidden">
+            <div className="p-4 border-b border-neutral-800 flex justify-between items-center">
+              <h2 className="text-white font-medium">Your Documents</h2>
+              <button 
+                onClick={() => setShowDocsModal(false)}
+                className="text-neutral-500 hover:text-white transition-colors"
+              >
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+              </button>
+            </div>
+            
+            <div className="p-4 max-h-[60vh] overflow-y-auto">
+              {loadingDocs ? (
+                <div className="text-neutral-500 text-sm text-center py-4">Loading documents...</div>
+              ) : documents.length === 0 ? (
+                <div className="text-neutral-500 text-sm text-center py-4">No documents uploaded yet.</div>
+              ) : (
+                <ul className="space-y-2">
+                  {documents.map((doc, idx) => (
+                    <li key={idx} className="flex justify-between items-center p-3 rounded-lg bg-neutral-900/50 border border-neutral-800 hover:border-neutral-700 transition-colors">
+                      <span className="text-sm text-neutral-300 truncate pr-4" title={doc}>📄 {doc}</span>
+                      <button 
+                        onClick={() => handleDeleteDocument(doc)}
+                        className="text-red-500 hover:text-red-400 p-1.5 rounded-md hover:bg-red-500/10 transition-colors"
+                        title="Delete document"
+                      >
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/></svg>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="w-full max-w-3xl flex flex-col h-[85vh] bg-[#111111] rounded-xl border border-neutral-800 overflow-hidden">
         
         {userId.startsWith('guest-') && (
@@ -108,12 +184,19 @@ export default function Home() {
           </div>
         )}
 
-        <div className="p-4 border-b border-neutral-800 flex justify-between items-center bg-[#111111]">
+        <div className="p-4 border-b border-neutral-800 flex justify-between items-center bg-[#111111] flex-wrap gap-2">
           <h1 className="text-lg font-semibold tracking-tight text-white">
             Agent<span className="text-neutral-500">.ai</span>
           </h1>
           
           <div className="flex gap-2">
+            <button 
+              onClick={() => setShowDocsModal(true)}
+              className="px-3 py-1.5 rounded-md text-xs font-medium bg-neutral-900 hover:bg-neutral-800 text-neutral-300 border border-neutral-800 transition-colors"
+            >
+              📁 Manage Docs
+            </button>
+
             <input 
               type="file" 
               accept=".txt" 
@@ -126,7 +209,7 @@ export default function Home() {
               disabled={uploading}
               className="px-3 py-1.5 rounded-md text-xs font-medium bg-neutral-800 hover:bg-neutral-700 text-neutral-200 border border-neutral-700 transition-colors disabled:opacity-50"
             >
-              {uploading ? 'Uploading...' : 'Upload File'}
+              {uploading ? 'Uploading...' : '+ Upload File'}
             </button>
 
             <button 
@@ -157,7 +240,6 @@ export default function Home() {
               </div>
             </div>
           ))}
-          
           {loading && (
             <div className="flex justify-start">
               <div className="text-neutral-500 text-sm py-2 animate-pulse flex items-center gap-2">
@@ -165,7 +247,6 @@ export default function Home() {
               </div>
             </div>
           )}
-          
           <div ref={messagesEndRef} />
         </div>
 

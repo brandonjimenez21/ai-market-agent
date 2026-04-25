@@ -120,3 +120,64 @@ def rag_chat(question: str, user_id: str = ""):
         }
     except Exception as e:
         return {"error": f"RAG system failure: {str(e)}"}
+    
+@app.get("/api/ai/documents")
+def list_documents(user_id: str):
+    try:
+        vector_store = QdrantVectorStore.from_existing_collection(
+            embedding=embeddings_model,
+            collection_name="company_documents",
+            url=qdrant_url,
+        )
+        
+        records, _ = vector_store.client.scroll(
+            collection_name="company_documents",
+            scroll_filter=Filter(
+                should=[
+                    FieldCondition(key="metadata.user_id", match=MatchValue(value=user_id)),
+                    FieldCondition(key="user_id", match=MatchValue(value=user_id))
+                ]
+            ),
+            limit=1000,
+            with_payload=True,
+            with_vectors=False
+        )
+
+        filenames = set()
+        for record in records:
+            if record.payload and "metadata" in record.payload and "filename" in record.payload["metadata"]:
+                filenames.add(record.payload["metadata"]["filename"])
+            elif record.payload and "filename" in record.payload:
+                filenames.add(record.payload["filename"])
+
+        return {"documents": list(filenames)}
+    except Exception as e:
+        return {"error": f"Failed to list documents: {str(e)}"}
+
+@app.delete("/api/ai/documents")
+def delete_document(user_id: str, filename: str):
+    try:
+        vector_store = QdrantVectorStore.from_existing_collection(
+            embedding=embeddings_model,
+            collection_name="company_documents",
+            url=qdrant_url,
+        )
+        
+        vector_store.client.delete(
+            collection_name="company_documents",
+            points_selector=Filter(
+                must=[
+                    Filter(should=[
+                        FieldCondition(key="metadata.user_id", match=MatchValue(value=user_id)),
+                        FieldCondition(key="user_id", match=MatchValue(value=user_id))
+                    ]),
+                    Filter(should=[
+                        FieldCondition(key="metadata.filename", match=MatchValue(value=filename)),
+                        FieldCondition(key="filename", match=MatchValue(value=filename))
+                    ])
+                ]
+            )
+        )
+        return {"status": "Success", "message": f"Document '{filename}' deleted permanently. 🗑️"}
+    except Exception as e:
+        return {"error": f"Failed to delete document: {str(e)}"}

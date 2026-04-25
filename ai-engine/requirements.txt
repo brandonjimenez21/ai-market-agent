@@ -1,0 +1,4 @@
+fastapi
+uvicorn
+pydantic
+# Próximamente: langchain, openai, redis, qdrant-client

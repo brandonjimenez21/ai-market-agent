@@ -1,0 +1,79 @@
+version: '3.8'
+
+services:
+  # 1. FRONTEND: Next.js
+  frontend:
+    build: 
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    environment:
+      - NODE_ENV=development
+    networks:
+      - agent-network
+
+  # 2. EL MÚSCULO: Go API Gateway
+  gateway:
+    build:
+      context: ./gateway
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./gateway:/app
+    environment:
+      - REDIS_URL=redis:6379
+      - PYTHON_AI_URL=http://ai-engine:8000
+    depends_on:
+      - redis
+    networks:
+      - agent-network
+
+  # 3. EL CEREBRO: Python FastAPI + IA
+  ai-engine:
+    build:
+      context: ./ai-engine
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./ai-engine:/app
+    environment:
+      - REDIS_URL=redis:6379
+      - QDRANT_URL=http://qdrant:6333
+    depends_on:
+      - redis
+      - qdrant
+    networks:
+      - agent-network
+
+  # 4. EL MENSAJERO: Redis
+  redis:
+    image: redis:alpine
+    ports:
+      - "6379:6379"
+    networks:
+      - agent-network
+
+  # 5. MEMORIA DE LA IA: Qdrant (Base de Datos Vectorial)
+  qdrant:
+    image: qdrant/qdrant:latest
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    networks:
+      - agent-network
+
+# Configuración de red y volúmenes persistentes
+networks:
+  agent-network:
+    driver: bridge
+
+volumes:
+  qdrant_data:

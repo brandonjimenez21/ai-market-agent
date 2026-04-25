@@ -1,0 +1,23 @@
+name: Integración Continua (CI)
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build-and-verify:
+    name: Construir Contenedores
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 📥 Descargar el código
+        uses: actions/checkout@v4
+
+      - name: 🐳 Configurar Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: 🏗️ Construir imágenes de Docker Compose
+        # Este comando intenta construir todos tus Dockerfiles. Si uno falla (ej. error en Go o Python), la CI se pone en rojo.
+        run: docker compose build

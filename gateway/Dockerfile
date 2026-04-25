@@ -1,19 +1,22 @@
 FROM golang:1.26-alpine
 
-# Establecemos el directorio de trabajo
+# We establish the working directory
 WORKDIR /app
 
-# Copiamos el archivo de módulos
+# 1. We installed Air (The Live Reload Tool for Go)
+RUN go install github.com/air-verse/air@latest
+
+# We copy the module file
 COPY go.mod ./
 
-# Descargamos las dependencias (por ahora no hay externas, pero es buena práctica)
+# We download the dependencies (for now there are no external dependencies, but it's a good practice)
 RUN go mod download
 
-# Copiamos el resto de nuestro código (el main.go)
+# We copy the rest of our code (the main.go)
 COPY . .
 
-# Exponemos el puerto 8080 que definimos en el código
+# We expose the port 8080 that we defined in the code
 EXPOSE 8080
 
-# Comando para ejecutar la aplicación en modo desarrollo
-CMD ["go", "run", "main.go"]
+# Command to run the application in development mode
+CMD ["air"]

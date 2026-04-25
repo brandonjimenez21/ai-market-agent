@@ -1,19 +1,19 @@
 FROM node:20-alpine
 
-# Establecemos el directorio de trabajo dentro del contenedor
+# We set the working directory within the container
 WORKDIR /app
 
-# Copiamos los archivos de dependencias primero (para aprovechar el caché de Docker)
+# We copy the dependency files first (to take advantage of Docker's cache)
 COPY package.json package-lock.json ./
 
-# Instalamos las dependencias
+# # We installed the facilities
 RUN npm install
 
-# Copiamos el resto del código del frontend
+# We copy the rest of the frontend code
 COPY . .
 
-# Exponemos el puerto 3000
+# We expose port 3000
 EXPOSE 3000
 
-# Comando para iniciar Next.js en modo desarrollo
+# Command to start Next.js in development mode
 CMD ["npm", "run", "dev"]

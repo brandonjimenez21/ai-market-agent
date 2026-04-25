@@ -1,4 +1,7 @@
 fastapi
 uvicorn
 pydantic
-# Próximamente: langchain, openai, redis, qdrant-client
+langchain
+langchain-google-genai
+qdrant-client
+langchain-qdrant

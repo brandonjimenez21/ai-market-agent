@@ -1,19 +1,19 @@
 FROM python:3.11-slim
 
-# Establecemos el directorio de trabajo
+# We set the working directory
 WORKDIR /app
-
-# Copiamos el archivo de dependencias primero para aprovechar el caché
+    
+# We copy the dependency file first to take advantage of the cache
 COPY requirements.txt .
 
-# Instalamos las dependencias sin guardar caché para hacer la imagen más ligera
+# We installed the dependencies without caching to make the image lighter
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copiamos el resto de nuestro código
+# We copy the rest of our code
 COPY . .
 
-# Exponemos el puerto 8000
+# We expose port 8000
 EXPOSE 8000
 
-# Comando para iniciar FastAPI con Uvicorn (con recarga automática para desarrollo)
+# Command to start FastAPI with Uvicorn (with auto-reload for development)
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]

@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   # 1. FRONTEND: Next.js
   frontend:
@@ -13,10 +11,12 @@ services:
       - /app/node_modules
     environment:
       - NODE_ENV=development
+      - WATCHPACK_POLLING=true
+      - CHOKIDAR_USEPOLLING=true
     networks:
       - agent-network
 
-  # 2. EL MÚSCULO: Go API Gateway
+  # 2. THE MUSCLE: Go API Gateway
   gateway:
     build:
       context: ./gateway
@@ -33,7 +33,7 @@ services:
     networks:
       - agent-network
 
-  # 3. EL CEREBRO: Python FastAPI + IA
+  # 3. THE BRAIN: Python FastAPI + AI
   ai-engine:
     build:
       context: ./ai-engine
@@ -42,6 +42,8 @@ services:
       - "8000:8000"
     volumes:
       - ./ai-engine:/app
+    env_file:
+      - .env
     environment:
       - REDIS_URL=redis:6379
       - QDRANT_URL=http://qdrant:6333
@@ -51,7 +53,7 @@ services:
     networks:
       - agent-network
 
-  # 4. EL MENSAJERO: Redis
+  # 4. THE MESSENGER: Redis
   redis:
     image: redis:alpine
     ports:
@@ -59,7 +61,7 @@ services:
     networks:
       - agent-network
 
-  # 5. MEMORIA DE LA IA: Qdrant (Base de Datos Vectorial)
+  # 5. THE MEMORY OF THE AI: Qdrant (Vector Database)
   qdrant:
     image: qdrant/qdrant:latest
     ports:
@@ -70,7 +72,7 @@ services:
     networks:
       - agent-network
 
-# Configuración de red y volúmenes persistentes
+# Network configuration and persistent volumes
 networks:
   agent-network:
     driver: bridge

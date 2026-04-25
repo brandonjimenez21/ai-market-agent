@@ -1,36 +1,49 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 )
 
-type HealthResponse struct {
-	Status  string `json:"status"`
-	Message string `json:"message"`
+func enableCORS(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		if r.Method == "OPTIONS" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		next(w, r)
+	}
 }
 
-func healthCheck(w http.ResponseWriter, r *http.Request) {
+// Go asks Python
+func askAI(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	
-	response := HealthResponse{
-		Status:  "success",
-		Message: "API Gateway en Go funcionando al 100%",
+
+	// Go asks the "ai-engine" container on its port 8000 using the Chat route
+	resp, err := http.Get("http://ai-engine:8000/api/ai/chat")
+	if err != nil {
+		http.Error(w, `{"error": "The AI Brain is not responding"}`, http.StatusInternalServerError)
+		return
 	}
-	
-	json.NewEncoder(w).Encode(response)
+	defer resp.Body.Close()
+
+	// Go reads the response from Python and passes it directly to Next.js
+	body, _ := io.ReadAll(resp.Body)
+	w.Write(body)
 }
 
 func main() {
-	http.HandleFunc("/api/health", healthCheck)
+	http.HandleFunc("/api/ask-ai", enableCORS(askAI))
 
 	port := ":8080"
-	fmt.Printf("🚀 Gateway corriendo en el puerto %s\n", port)
+	fmt.Printf("🚀 Gateway running on port %s\n", port)
 	
 	if err := http.ListenAndServe(port, nil); err != nil {
-		log.Fatalf("Error al iniciar el servidor: %v", err)
+		log.Fatalf("Error starting the server: %v", err)
 	}
 }

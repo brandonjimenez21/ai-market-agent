@@ -6,7 +6,7 @@ WORKDIR /app
 # We copy the dependency files first (to take advantage of Docker's cache)
 COPY package.json package-lock.json ./
 
-# # We installed the facilities
+# We installed the facilities
 RUN npm install
 
 # We copy the rest of the frontend code

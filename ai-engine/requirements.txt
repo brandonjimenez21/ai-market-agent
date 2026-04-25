@@ -5,3 +5,5 @@ langchain
 langchain-google-genai
 qdrant-client
 langchain-qdrant
+python-multipart
+langchain-text-splitters

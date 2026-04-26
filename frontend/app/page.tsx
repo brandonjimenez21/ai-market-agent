@@ -83,6 +83,13 @@ export default function Home() {
     const userMessage = input;
     setInput('');
     
+    const historyToSend = messages
+      .filter(msg => msg.role !== 'system')
+      .map(msg => ({
+        role: msg.role,
+        content: msg.content
+      }));
+
     setMessages(prev => [...prev, { id: Date.now(), role: 'user', content: userMessage }]);
     setLoading(true);
 
@@ -90,7 +97,12 @@ export default function Home() {
       const res = await fetch('http://localhost:8080/api/ask-ai', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ question: userMessage, mode, user_id: userId })
+        body: JSON.stringify({ 
+          question: userMessage, 
+          mode, 
+          user_id: userId,
+          history: historyToSend 
+        })
       });
       
       const data = await res.json();

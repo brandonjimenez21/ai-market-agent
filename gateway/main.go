@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes" 
 	"encoding/json"
 	"fmt"
 	"io"
@@ -9,16 +10,22 @@ import (
 	"net/url"
 )
 
+type Message struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
 type ChatRequest struct {
-	Question string `json:"question"`
-	Mode     string `json:"mode"`
-	UserID   string `json:"user_id"`
+	Question string    `json:"question"`
+	Mode     string    `json:"mode"`
+	UserID   string    `json:"user_id"`
+	History  []Message `json:"history"`
 }
 
 func enableCORS(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS") // 🚨 Agregamos DELETE a los métodos permitidos
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 		if r.Method == "OPTIONS" {
 			w.WriteHeader(http.StatusOK)
@@ -36,19 +43,20 @@ func askAI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	pythonURL := "http://ai-engine:8000/api/ai/chat?question="
+	pythonURL := "http://ai-engine:8000/api/ai/chat"
 	if reqBody.Mode == "rag" {
-		pythonURL = fmt.Sprintf("http://ai-engine:8000/api/ai/ask-doc?question=%s&user_id=%s", url.QueryEscape(reqBody.Question), url.QueryEscape(reqBody.UserID))
-	} else {
-		pythonURL = pythonURL + url.QueryEscape(reqBody.Question)
+		pythonURL = "http://ai-engine:8000/api/ai/ask-doc"
 	}
 
-	resp, err := http.Get(pythonURL)
+	jsonData, _ := json.Marshal(reqBody)
+	resp, err := http.Post(pythonURL, "application/json", bytes.NewBuffer(jsonData))
+	
 	if err != nil {
 		http.Error(w, `{"error": "The AI Brain is not responding"}`, http.StatusInternalServerError)
 		return
 	}
 	defer resp.Body.Close()
+	
 	body, _ := io.ReadAll(resp.Body)
 	w.Write(body)
 }
@@ -68,13 +76,11 @@ func uploadFile(w http.ResponseWriter, r *http.Request) {
 
 func handleDocuments(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	
 	userID := r.URL.Query().Get("user_id")
 	if userID == "" {
 		http.Error(w, `{"error": "user_id is required"}`, http.StatusBadRequest)
 		return
 	}
-
 	if r.Method == "GET" {
 		pythonURL := fmt.Sprintf("http://ai-engine:8000/api/ai/documents?user_id=%s", url.QueryEscape(userID))
 		resp, err := http.Get(pythonURL)
@@ -87,22 +93,18 @@ func handleDocuments(w http.ResponseWriter, r *http.Request) {
 		w.Write(body)
 		return
 	}
-
 	if r.Method == "DELETE" {
 		filename := r.URL.Query().Get("filename")
 		if filename == "" {
 			http.Error(w, `{"error": "filename is required"}`, http.StatusBadRequest)
 			return
 		}
-		
 		pythonURL := fmt.Sprintf("http://ai-engine:8000/api/ai/documents?user_id=%s&filename=%s", url.QueryEscape(userID), url.QueryEscape(filename))
-		
 		req, err := http.NewRequest("DELETE", pythonURL, nil)
 		if err != nil {
 			http.Error(w, `{"error": "Failed to create request"}`, http.StatusInternalServerError)
 			return
 		}
-		
 		client := &http.Client{}
 		resp, err := client.Do(req)
 		if err != nil {
@@ -114,15 +116,13 @@ func handleDocuments(w http.ResponseWriter, r *http.Request) {
 		w.Write(body)
 		return
 	}
-
 	http.Error(w, `{"error": "Method not allowed"}`, http.StatusMethodNotAllowed)
 }
 
 func main() {
 	http.HandleFunc("/api/ask-ai", enableCORS(askAI))
 	http.HandleFunc("/api/upload", enableCORS(uploadFile))
-	http.HandleFunc("/api/documents", enableCORS(handleDocuments)) 
-
+	http.HandleFunc("/api/documents", enableCORS(handleDocuments))
 	port := ":8080"
 	fmt.Printf("🚀 Gateway running on port %s\n", port)
 	if err := http.ListenAndServe(port, nil); err != nil {

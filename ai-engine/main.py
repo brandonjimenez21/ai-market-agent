@@ -8,8 +8,32 @@ from langchain_qdrant import QdrantVectorStore
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from qdrant_client.models import Filter, FieldCondition, MatchValue
 from pypdf import PdfReader
+from pydantic import BaseModel
+from typing import List, Optional
 
 app = FastAPI(title="AI Market Agent - Full RAG")
+
+class Message(BaseModel):
+    role: str
+    content: str
+
+class ChatRequest(BaseModel):
+    question: str
+    mode: Optional[str] = "normal"
+    user_id: Optional[str] = ""
+    history: Optional[List[Message]] = []
+
+def format_history(history: List[Message]) -> str:
+    if not history:
+        return ""
+
+    formatted = ""
+    for msg in history[-6:]: 
+        if msg.role == "user":
+            formatted += f"User: {msg.content}\n"
+        elif msg.role == "bot":
+            formatted += f"AI: {msg.content}\n"
+    return formatted
 
 api_key = os.getenv("GEMINI_API_KEY")
 qdrant_url = os.getenv("QDRANT_URL", "http://qdrant:6333") 
@@ -31,11 +55,21 @@ embeddings_model = GoogleGenerativeAIEmbeddings(
 def health_check():
     return {"status": "success", "message": "Full AI Engine running 🧠"}
 
-@app.get("/api/ai/chat")
-def normal_chat(question: str = "Hello"):
-    prompt = PromptTemplate.from_template("Answer this briefly: {question}")
+@app.post("/api/ai/chat")
+def normal_chat(req: ChatRequest):
+    history_text = format_history(req.history)
+    
+    prompt = PromptTemplate.from_template("""
+    You are a helpful and intelligent AI assistant. 
+    Use the conversation history to understand the context of the user's new question.
+    
+    Conversation History:
+    {history}
+    
+    Current Question: {question}
+    """)
     chain = prompt | llm
-    answer = chain.invoke({"question": question})
+    answer = chain.invoke({"history": history_text, "question": req.question})
     return {"mode": "Normal", "answer": answer.content}
 
 @app.post("/api/ai/upload")
@@ -80,8 +114,8 @@ async def upload_document(file: UploadFile = File(...), user_id: str = Form(...)
     except Exception as e:
         return {"error": f"Failed to process file: {str(e)}"}
 
-@app.get("/api/ai/ask-doc")
-def rag_chat(question: str, user_id: str = ""):
+@app.post("/api/ai/ask-doc")
+def rag_chat(req: ChatRequest):
     try:
         vector_store = QdrantVectorStore.from_existing_collection(
             embedding=embeddings_model,
@@ -90,15 +124,18 @@ def rag_chat(question: str, user_id: str = ""):
         )
         
         search_filter = Filter(
-            must=[
-                FieldCondition(
-                    key="metadata.user_id",
-                    match=MatchValue(value=user_id),
-                )
+            should=[
+                FieldCondition(key="metadata.user_id", match=MatchValue(value=req.user_id)),
+                FieldCondition(key="user_id", match=MatchValue(value=req.user_id))
             ]
         )
+
+        search_query = req.question
+        if req.history:
+            last_msg = req.history[-1].content
+            search_query = f"{last_msg} {req.question}"
         
-        results = vector_store.similarity_search(question, k=8, filter=search_filter)
+        results = vector_store.similarity_search(search_query, k=40, filter=search_filter)
         
         if not results:
             return {
@@ -107,23 +144,28 @@ def rag_chat(question: str, user_id: str = ""):
             }
         
         found_context = "\n".join([doc.page_content for doc in results])
+        history_text = format_history(req.history)
         
         prompt_rag = PromptTemplate.from_template("""
-        You are an expert and helpful AI assistant. 
-        Answer the user's question based ONLY on the following context.
-        Provide a comprehensive, detailed, and well-explained answer. If they ask about a topic or chapter, summarize its main points clearly, don't just give the title.
-        If the answer is not in the context, say "I don't have information about that in my documents".
+        You are an expert and helpful AI assistant analyzing private documents. 
+        Answer the user's Current Question based ONLY on the following Document Context.
+        Use the Conversation History to understand pronouns (like "he", "it", "that") or follow-up questions.
+        Provide a comprehensive, detailed, and well-explained answer formatted nicely.
         
-        Context found in the database:
+        Conversation History:
+        {history}
+        
+        Document Context found in database:
         {context}
         
-        User's question: {question}
+        Current Question: {question}
         """)
         
         chain = prompt_rag | llm
         answer = chain.invoke({
+            "history": history_text,
             "context": found_context,
-            "question": question
+            "question": req.question
         })
         
         return {

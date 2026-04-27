@@ -9,6 +9,8 @@ services:
     volumes:
       - ./frontend:/app
       - /app/node_modules
+    env_file:
+      - ./frontend/.env.local
     environment:
       - NODE_ENV=development
       - WATCHPACK_POLLING=true
@@ -72,6 +74,21 @@ services:
     networks:
       - agent-network
 
+  db:
+    image: postgres:15
+    container_name: postgres_db
+    restart: always
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: password123
+      POSTGRES_DB: agent_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - agent-network
+
 # Network configuration and persistent volumes
 networks:
   agent-network:
@@ -79,3 +96,4 @@ networks:
 
 volumes:
   qdrant_data:
+  pgdata:

@@ -1,6 +1,8 @@
 import os
 import io
+import psycopg2
 from fastapi import FastAPI, UploadFile, File, Form
+from fastapi.responses import StreamingResponse
 from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
 from langchain_core.prompts import PromptTemplate
 from langchain_core.documents import Document
@@ -36,11 +38,35 @@ def format_history(history: List[Message]) -> str:
     return formatted
 
 api_key = os.getenv("GEMINI_API_KEY")
-qdrant_url = os.getenv("QDRANT_URL", "http://qdrant:6333") 
+qdrant_url = os.getenv("QDRANT_URL", "http://qdrant:6333")
+
+DB_URL = "postgresql://admin:password123@db:5432/agent_db"
+
+def init_db():
+    try:
+        conn = psycopg2.connect(DB_URL)
+        cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS chat_history (
+                id SERIAL PRIMARY KEY,
+                user_id VARCHAR(255) NOT NULL,
+                role VARCHAR(50) NOT NULL,
+                content TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        conn.commit()
+        cursor.close()
+        conn.close()
+        print("✅ Base de datos PostgreSQL inicializada correctamente!")
+    except Exception as e:
+        print(f"❌ Error conectando a PostgreSQL: {e}")
+
+init_db()
 
 # 1. The Talking Brain
 llm = ChatGoogleGenerativeAI(
-    model="gemini-2.5-flash", 
+    model="gemini-2.5-flash-lite", 
     google_api_key=api_key,
     temperature=0.3 
 )
@@ -51,26 +77,102 @@ embeddings_model = GoogleGenerativeAIEmbeddings(
     google_api_key=api_key
 )
 
+@app.post("/api/ai/chat")
+def autonomous_agent(req: ChatRequest):
+    try:
+        found_context = ""
+        
+        try:
+            vector_store = QdrantVectorStore.from_existing_collection(
+                embedding=embeddings_model,
+                collection_name="company_documents",
+                url=qdrant_url,
+            )
+            
+            search_filter = Filter(
+                should=[
+                    FieldCondition(key="metadata.user_id", match=MatchValue(value=req.user_id)),
+                    FieldCondition(key="user_id", match=MatchValue(value=req.user_id))
+                ]
+            )
+            
+            search_query = req.question
+            if req.history:
+                recent_msgs = " ".join([msg.content for msg in req.history[-3:]])
+                search_query = f"{recent_msgs} {req.question}"
+                
+            results = vector_store.similarity_search(search_query, k=5, filter=search_filter)
+            found_context = "\n".join([doc.page_content for doc in results])
+        except Exception:
+            pass
+
+        history_text = format_history(req.history)
+        
+        agent_prompt = PromptTemplate.from_template("""
+        You are Agent.ai, an advanced autonomous assistant.
+        
+        Conversation History:
+        {history}
+        
+        User's Private Documents Context (if any):
+        {context}
+        
+        Current User Question: {question}
+        
+        INSTRUCTIONS:
+        1. Evaluate the user's question.
+        2. If it's a general question, answer from your knowledge.
+        3. If it relates to the Private Context, base your answer HEAVILY on it.
+        4. If the info isn't in the context, politely say so.
+        """)
+        
+        chain = agent_prompt | llm
+        
+        def generate_response():
+            full_ai_response = ""
+            try:
+                if req.user_id:
+                    conn = psycopg2.connect(DB_URL)
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        "INSERT INTO chat_history (user_id, role, content) VALUES (%s, %s, %s)",
+                        (req.user_id, "user", req.question)
+                    )
+                    conn.commit()
+
+                for chunk in chain.stream({
+                    "history": history_text,
+                    "context": found_context,
+                    "question": req.question
+                }):
+                    if chunk.content:
+                        full_ai_response += chunk.content 
+                        safe_content = chunk.content.replace('\n', '\\n')
+                        yield f"data: {safe_content}\n\n"
+                
+                yield "data: [DONE]\n\n"
+
+                if req.user_id:
+                    cursor.execute(
+                        "INSERT INTO chat_history (user_id, role, content) VALUES (%s, %s, %s)",
+                        (req.user_id, "bot", full_ai_response)
+                    )
+                    conn.commit()
+                    cursor.close()
+                    conn.close()
+
+            except Exception as e:
+                error_real = str(e).replace('\n', ' ')
+                yield f"data: 🚨 Error Interno: {error_real}\n\n"
+
+        return StreamingResponse(generate_response(), media_type="text/event-stream")
+        
+    except Exception as e:
+        return {"error": f"Agent failure: {str(e)}"}
+
 @app.get("/api/ai/health")
 def health_check():
     return {"status": "success", "message": "Full AI Engine running 🧠"}
-
-@app.post("/api/ai/chat")
-def normal_chat(req: ChatRequest):
-    history_text = format_history(req.history)
-    
-    prompt = PromptTemplate.from_template("""
-    You are a helpful and intelligent AI assistant. 
-    Use the conversation history to understand the context of the user's new question.
-    
-    Conversation History:
-    {history}
-    
-    Current Question: {question}
-    """)
-    chain = prompt | llm
-    answer = chain.invoke({"history": history_text, "question": req.question})
-    return {"mode": "Normal", "answer": answer.content}
 
 @app.post("/api/ai/upload")
 async def upload_document(file: UploadFile = File(...), user_id: str = Form(...)):
@@ -91,8 +193,8 @@ async def upload_document(file: UploadFile = File(...), user_id: str = Form(...)
             return {"error": "Could not extract text. The file might be empty or a scanned image."}
         
         text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=500,
-            chunk_overlap=50
+            chunk_size=1500,
+            chunk_overlap=150
         )
         chunks = text_splitter.split_text(text)
         
@@ -113,67 +215,6 @@ async def upload_document(file: UploadFile = File(...), user_id: str = Form(...)
         return {"status": "Success", "message": f"File '{file.filename}' processed and saved."}
     except Exception as e:
         return {"error": f"Failed to process file: {str(e)}"}
-
-@app.post("/api/ai/ask-doc")
-def rag_chat(req: ChatRequest):
-    try:
-        vector_store = QdrantVectorStore.from_existing_collection(
-            embedding=embeddings_model,
-            collection_name="company_documents",
-            url=qdrant_url,
-        )
-        
-        search_filter = Filter(
-            should=[
-                FieldCondition(key="metadata.user_id", match=MatchValue(value=req.user_id)),
-                FieldCondition(key="user_id", match=MatchValue(value=req.user_id))
-            ]
-        )
-
-        search_query = req.question
-        if req.history:
-            last_msg = req.history[-1].content
-            search_query = f"{last_msg} {req.question}"
-        
-        results = vector_store.similarity_search(search_query, k=40, filter=search_filter)
-        
-        if not results:
-            return {
-                "mode": "Documents (RAG)",
-                "answer": "You haven't uploaded any documents yet, or I couldn't find the answer in them."
-            }
-        
-        found_context = "\n".join([doc.page_content for doc in results])
-        history_text = format_history(req.history)
-        
-        prompt_rag = PromptTemplate.from_template("""
-        You are an expert and helpful AI assistant analyzing private documents. 
-        Answer the user's Current Question based ONLY on the following Document Context.
-        Use the Conversation History to understand pronouns (like "he", "it", "that") or follow-up questions.
-        Provide a comprehensive, detailed, and well-explained answer formatted nicely.
-        
-        Conversation History:
-        {history}
-        
-        Document Context found in database:
-        {context}
-        
-        Current Question: {question}
-        """)
-        
-        chain = prompt_rag | llm
-        answer = chain.invoke({
-            "history": history_text,
-            "context": found_context,
-            "question": req.question
-        })
-        
-        return {
-            "mode": "Documents (RAG)", 
-            "answer": answer.content
-        }
-    except Exception as e:
-        return {"error": f"RAG system failure: {str(e)}"}
     
 @app.get("/api/ai/documents")
 def list_documents(user_id: str):
@@ -235,3 +276,22 @@ def delete_document(user_id: str, filename: str):
         return {"status": "Success", "message": f"Document '{filename}' deleted permanently. 🗑️"}
     except Exception as e:
         return {"error": f"Failed to delete document: {str(e)}"}
+    
+@app.get("/api/ai/history")
+def get_chat_history(user_id: str):
+    try:
+        conn = psycopg2.connect(DB_URL)
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT role, content FROM chat_history WHERE user_id = %s ORDER BY created_at ASC LIMIT 50",
+            (user_id,)
+        )
+        rows = cursor.fetchall()
+        cursor.close()
+        conn.close()
+        
+        # Le damos formato JSON para el frontend
+        history = [{"role": row[0], "content": row[1]} for row in rows]
+        return {"history": history}
+    except Exception as e:
+        return {"error": f"Failed to fetch history: {str(e)}"}

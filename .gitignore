@@ -1,16 +1,25 @@
+# Bases de datos y volúmenes de Docker
+postgres_data/
+qdrant_data/
+
+# Variables de entorno (¡SECRETO!)
+.env
+.env.local
+frontend/.env
+frontend/.env.local
+ai-engine/.env
+
+# Node y dependencias
 node_modules/
-.next/
-out/
-.env*.local
+npm-debug.log
+yarn-error.log
 
-/gateway/gateway_bin
-*.exe
+# Next.js build output
+frontend/.next/
+frontend/out/
 
+# Python
 __pycache__/
 *.pyc
 .venv/
 venv/
-env/
-
-.DS_Store
-.env

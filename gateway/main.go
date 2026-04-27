@@ -36,29 +36,51 @@ func enableCORS(next http.HandlerFunc) http.HandlerFunc {
 }
 
 func askAI(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+
 	var reqBody ChatRequest
 	if err := json.NewDecoder(r.Body).Decode(&reqBody); err != nil || reqBody.Question == "" {
-		http.Error(w, `{"error": "Invalid request"}`, http.StatusBadRequest)
+		http.Error(w, `data: Invalid request\n\n`, http.StatusBadRequest)
 		return
 	}
 
 	pythonURL := "http://ai-engine:8000/api/ai/chat"
-	if reqBody.Mode == "rag" {
-		pythonURL = "http://ai-engine:8000/api/ai/ask-doc"
-	}
-
 	jsonData, _ := json.Marshal(reqBody)
-	resp, err := http.Post(pythonURL, "application/json", bytes.NewBuffer(jsonData))
+	
+	req, err := http.NewRequest("POST", pythonURL, bytes.NewBuffer(jsonData))
+	req.Header.Set("Content-Type", "application/json")
+	
+	client := &http.Client{}
+	resp, err := client.Do(req)
 	
 	if err != nil {
-		http.Error(w, `{"error": "The AI Brain is not responding"}`, http.StatusInternalServerError)
+		http.Error(w, `data: The AI Brain is not responding\n\n`, http.StatusInternalServerError)
 		return
 	}
 	defer resp.Body.Close()
-	
-	body, _ := io.ReadAll(resp.Body)
-	w.Write(body)
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "Streaming unsupported!", http.StatusInternalServerError)
+		return
+	}
+
+	buf := make([]byte, 1024)
+	for {
+		n, err := resp.Body.Read(buf)
+		if n > 0 {
+			w.Write(buf[:n])
+			flusher.Flush()
+		}
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			break
+		}
+	}
 }
 
 func uploadFile(w http.ResponseWriter, r *http.Request) {
@@ -119,10 +141,32 @@ func handleDocuments(w http.ResponseWriter, r *http.Request) {
 	http.Error(w, `{"error": "Method not allowed"}`, http.StatusMethodNotAllowed)
 }
 
+func getHistory(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	
+	userID := r.URL.Query().Get("user_id")
+	if userID == "" {
+		http.Error(w, `{"error": "user_id is required"}`, http.StatusBadRequest)
+		return
+	}
+
+	pythonURL := "http://ai-engine:8000/api/ai/history?user_id=" + userID
+	resp, err := http.Get(pythonURL)
+	if err != nil {
+		http.Error(w, `{"error": "Failed to fetch history"}`, http.StatusInternalServerError)
+		return
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	w.Write(body)
+}
+
 func main() {
 	http.HandleFunc("/api/ask-ai", enableCORS(askAI))
 	http.HandleFunc("/api/upload", enableCORS(uploadFile))
 	http.HandleFunc("/api/documents", enableCORS(handleDocuments))
+	http.HandleFunc("/api/history", enableCORS(getHistory))
 	port := ":8080"
 	fmt.Printf("🚀 Gateway running on port %s\n", port)
 	if err := http.ListenAndServe(port, nil); err != nil {

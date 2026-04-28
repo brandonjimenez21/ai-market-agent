@@ -84,16 +84,16 @@ func askAI(w http.ResponseWriter, r *http.Request) {
 }
 
 func uploadFile(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	resp, err := http.Post("http://ai-engine:8000/api/ai/upload", r.Header.Get("Content-Type"), r.Body)
-	if err != nil {
-		http.Error(w, `{"error": "Failed to reach AI Engine"}`, http.StatusInternalServerError)
-		return
-	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
-	w.WriteHeader(resp.StatusCode)
-	w.Write(body)
+    resp, err := http.Post("http://ai-engine:8000/api/ai/upload", r.Header.Get("Content-Type"), r.Body)
+    if err != nil {
+        http.Error(w, `{"error": "Failed to reach AI Engine"}`, http.StatusInternalServerError)
+        return
+    }
+    defer resp.Body.Close()
+    
+    body, _ := io.ReadAll(resp.Body)
+    w.WriteHeader(resp.StatusCode)
+    w.Write(body)
 }
 
 func handleDocuments(w http.ResponseWriter, r *http.Request) {
@@ -162,14 +162,51 @@ func getHistory(w http.ResponseWriter, r *http.Request) {
 	w.Write(body)
 }
 
+func proxyFiles(w http.ResponseWriter, r *http.Request) {
+	
+    pythonURL := "http://ai-engine:8000" + r.URL.Path
+    
+    fmt.Printf("🔍 Proxying FILE request to: %s\n", pythonURL)
+
+    req, err := http.NewRequest("GET", pythonURL, nil)
+    if err != nil {
+        http.Error(w, "Error creando request", http.StatusInternalServerError)
+        return
+    }
+
+    client := &http.Client{}
+    resp, err := client.Do(req)
+    if err != nil {
+        http.Error(w, "Error contactando a Python", http.StatusInternalServerError)
+        return
+    }
+    defer resp.Body.Close()
+
+    if resp.StatusCode == http.StatusNotFound {
+        w.WriteHeader(http.StatusNotFound)
+        fmt.Printf("❌ Python dijo que el archivo no existe en esa ruta\n")
+        return
+    }
+
+    for name, values := range resp.Header {
+        for _, value := range values {
+            w.Header().Add(name, value)
+        }
+    }
+    w.WriteHeader(resp.StatusCode)
+    io.Copy(w, resp.Body)
+}
+
 func main() {
-	http.HandleFunc("/api/ask-ai", enableCORS(askAI))
-	http.HandleFunc("/api/upload", enableCORS(uploadFile))
-	http.HandleFunc("/api/documents", enableCORS(handleDocuments))
-	http.HandleFunc("/api/history", enableCORS(getHistory))
-	port := ":8080"
-	fmt.Printf("🚀 Gateway running on port %s\n", port)
-	if err := http.ListenAndServe(port, nil); err != nil {
-		log.Fatalf("Error starting the server: %v", err)
-	}
+    http.HandleFunc("/api/ai/chat", enableCORS(askAI))
+    http.HandleFunc("/api/ai/upload", enableCORS(uploadFile))
+    http.HandleFunc("/api/ai/documents", enableCORS(handleDocuments))
+    http.HandleFunc("/api/ai/history", enableCORS(getHistory))
+    http.HandleFunc("/api/ai/files/", enableCORS(proxyFiles)) 
+
+    port := ":8080"
+    fmt.Printf("🚀 Gateway running on port %s\n", port)
+    if err := http.ListenAndServe(port, nil); err != nil {
+        log.Fatalf("Error starting the server: %v", err)
+    }
 }

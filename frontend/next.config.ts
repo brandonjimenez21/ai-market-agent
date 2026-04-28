@@ -8,6 +8,14 @@ const nextConfig: NextConfig = {
     };
     return config;
   },
+  async rewrites() {
+    return [
+      {
+        source: '/api/ai/:path*',
+        destination: 'http://gateway:8080/api/ai/:path*',
+      },
+    ];
+  },
   turbopack: {},
 };
 

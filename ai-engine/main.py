@@ -1,8 +1,11 @@
 import os
 import io
+import json 
 import psycopg2
+import urllib.parse
 from fastapi import FastAPI, UploadFile, File, Form
-from fastapi.responses import StreamingResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import StreamingResponse, FileResponse
 from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
 from langchain_core.prompts import PromptTemplate
 from langchain_core.documents import Document
@@ -14,6 +17,7 @@ from pydantic import BaseModel
 from typing import List, Optional
 
 app = FastAPI(title="AI Market Agent - Full RAG")
+os.makedirs("saved_docs", exist_ok=True)
 
 class Message(BaseModel):
     role: str
@@ -28,7 +32,6 @@ class ChatRequest(BaseModel):
 def format_history(history: List[Message]) -> str:
     if not history:
         return ""
-
     formatted = ""
     for msg in history[-6:]: 
         if msg.role == "user":
@@ -39,7 +42,6 @@ def format_history(history: List[Message]) -> str:
 
 api_key = os.getenv("GEMINI_API_KEY")
 qdrant_url = os.getenv("QDRANT_URL", "http://qdrant:6333")
-
 DB_URL = "postgresql://admin:password123@db:5432/agent_db"
 
 def init_db():
@@ -52,26 +54,25 @@ def init_db():
                 user_id VARCHAR(255) NOT NULL,
                 role VARCHAR(50) NOT NULL,
                 content TEXT NOT NULL,
+                citations TEXT, -- Para guardar los botones azules
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
         conn.commit()
         cursor.close()
         conn.close()
-        print("✅ Base de datos PostgreSQL inicializada correctamente!")
+        print("✅ Base de datos inicializada con soporte para citaciones!")
     except Exception as e:
-        print(f"❌ Error conectando a PostgreSQL: {e}")
+        print(f"❌ Error: {e}")
 
 init_db()
 
-# 1. The Talking Brain
 llm = ChatGoogleGenerativeAI(
     model="gemini-2.5-flash-lite", 
     google_api_key=api_key,
     temperature=0.3 
 )
 
-# 2. The Embedding Brain
 embeddings_model = GoogleGenerativeAIEmbeddings(
     model="models/gemini-embedding-001",
     google_api_key=api_key
@@ -81,6 +82,7 @@ embeddings_model = GoogleGenerativeAIEmbeddings(
 def autonomous_agent(req: ChatRequest):
     try:
         found_context = ""
+        unique_citations = []
         
         try:
             vector_store = QdrantVectorStore.from_existing_collection(
@@ -102,7 +104,22 @@ def autonomous_agent(req: ChatRequest):
                 search_query = f"{recent_msgs} {req.question}"
                 
             results = vector_store.similarity_search(search_query, k=5, filter=search_filter)
-            found_context = "\n".join([doc.page_content for doc in results])
+            
+            citations = []
+            for doc in results:
+                found_context += doc.page_content + "\n"
+                meta = doc.metadata or {}
+                page = meta.get("page", 1)
+                filename = meta.get("filename", "Documento")
+                citations.append({"file": filename, "page": page})
+            
+            seen = set()
+            for c in citations:
+                t = (c["file"], c["page"])
+                if t not in seen:
+                    seen.add(t)
+                    unique_citations.append(c)
+                    
         except Exception:
             pass
 
@@ -124,6 +141,7 @@ def autonomous_agent(req: ChatRequest):
         2. If it's a general question, answer from your knowledge.
         3. If it relates to the Private Context, base your answer HEAVILY on it.
         4. If the info isn't in the context, politely say so.
+        5. DO NOT mention page numbers in your text. The system handles citations automatically.
         """)
         
         chain = agent_prompt | llm
@@ -150,12 +168,17 @@ def autonomous_agent(req: ChatRequest):
                         safe_content = chunk.content.replace('\n', '\\n')
                         yield f"data: {safe_content}\n\n"
                 
+                cites_to_save = None
+                if unique_citations:
+                    cites_to_save = json.dumps(unique_citations)
+                    yield f"data: __CITATIONS__{cites_to_save}\n\n"
+                
                 yield "data: [DONE]\n\n"
 
                 if req.user_id:
                     cursor.execute(
-                        "INSERT INTO chat_history (user_id, role, content) VALUES (%s, %s, %s)",
-                        (req.user_id, "bot", full_ai_response)
+                        "INSERT INTO chat_history (user_id, role, content, citations) VALUES (%s, %s, %s, %s)",
+                        (req.user_id, "bot", full_ai_response, cites_to_save)
                     )
                     conn.commit()
                     cursor.close()
@@ -178,32 +201,44 @@ def health_check():
 async def upload_document(file: UploadFile = File(...), user_id: str = Form(...)):
     try:
         content = await file.read()
-        text = ""
-        
-        if file.filename.lower().endswith(".pdf"):
-            pdf_reader = PdfReader(io.BytesIO(content))
-            for page in pdf_reader.pages:
-                extracted = page.extract_text()
-                if extracted:
-                    text += extracted + "\n"
-        else:
-            text = content.decode("utf-8")
-            
-        if not text.strip():
-            return {"error": "Could not extract text. The file might be empty or a scanned image."}
+        docs = []
+
+        file_path = f"saved_docs/{user_id}_{file.filename}"
+        with open(file_path, "wb") as f:
+            f.write(content)
         
         text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=1500,
             chunk_overlap=150
         )
-        chunks = text_splitter.split_text(text)
         
-        docs = [
-            Document(
-                page_content=chunk, 
-                metadata={"user_id": user_id, "filename": file.filename}
-            ) for chunk in chunks
-        ]
+        if file.filename.lower().endswith(".pdf"):
+            pdf_reader = PdfReader(io.BytesIO(content))
+            for i, page in enumerate(pdf_reader.pages):
+                extracted = page.extract_text()
+                if extracted and extracted.strip():
+                    chunks = text_splitter.split_text(extracted)
+                    for chunk in chunks:
+                        docs.append(
+                            Document(
+                                page_content=chunk, 
+                                metadata={"user_id": user_id, "filename": file.filename, "page": i + 1}
+                            )
+                        )
+        else:
+            text = content.decode("utf-8")
+            if text.strip():
+                chunks = text_splitter.split_text(text)
+                for chunk in chunks:
+                    docs.append(
+                        Document(
+                            page_content=chunk, 
+                            metadata={"user_id": user_id, "filename": file.filename, "page": 1}
+                        )
+                    )
+            
+        if not docs:
+            return {"error": "Could not extract text. The file might be empty or a scanned image."}
         
         QdrantVectorStore.from_documents(
             docs,
@@ -283,15 +318,29 @@ def get_chat_history(user_id: str):
         conn = psycopg2.connect(DB_URL)
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT role, content FROM chat_history WHERE user_id = %s ORDER BY created_at ASC LIMIT 50",
+            "SELECT role, content, citations FROM chat_history WHERE user_id = %s ORDER BY created_at ASC LIMIT 50",
             (user_id,)
         )
         rows = cursor.fetchall()
         cursor.close()
         conn.close()
         
-        # Le damos formato JSON para el frontend
-        history = [{"role": row[0], "content": row[1]} for row in rows]
+        history = [
+            {
+                "role": row[0], 
+                "content": row[1], 
+                "citations": json.loads(row[2]) if row[2] else None
+            } for row in rows
+        ]
         return {"history": history}
     except Exception as e:
         return {"error": f"Failed to fetch history: {str(e)}"}
+
+@app.get("/api/ai/files/{file_name:path}")
+def serve_file(file_name: str):
+    file_path = os.path.join("saved_docs", file_name)
+    
+    if os.path.exists(file_path):
+        return FileResponse(file_path, media_type="application/pdf")
+    
+    return {"error": f"Archivo no encontrado en el disco de Python", "ruta_buscada": file_path}
